@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>乒乓對賽統計系統</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: "Microsoft JhengHei", sans-serif; background: #f0f2f5; padding: 15px; color: #333; line-height: 1.5; }
+        .container { max-width: 900px; margin: auto; background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        h1 { text-align: center; color: #1a73e8; font-size: 1.6rem; margin-bottom: 20px; }
+        .section { margin-bottom: 25px; border-bottom: 1px solid #eee; padding-bottom: 20px; }
+        .flex-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+        input, select, button { padding: 12px; border-radius: 8px; border: 1px solid #ddd; font-size: 16px; }
+        button { background: #1a73e8; color: white; border: none; cursor: pointer; font-weight: bold; transition: 0.3s; }
+        button:active { transform: scale(0.95); }
+        .btn-danger { background: #ea4335; }
+        .btn-success { background: #34a853; }
+        .btn-export { background: #fbbc05; color: #333; }
+
+        /* 球員標籤 */
+        .player-chip { background: #e8f0fe; padding: 5px 12px; border-radius: 20px; font-size: 0.9em; border: 1px solid #d2e3fc; display: inline-block; margin: 3px; }
+        .count-badge { background: #1a73e8; color: white; border-radius: 50%; padding: 2px 7px; margin-left: 5px; font-size: 0.8em; }
+
+        /* 矩陣圖示表格 */
+        .matrix-wrapper { overflow-x: auto; margin: 15px 0; border-radius: 8px; border: 1px solid #ddd; }
+        table { width: 100%; border-collapse: collapse; min-width: 450px; background: #fff; }
+        th, td { border: 1px solid #eee; padding: 12px; text-align: center; font-size: 14px; }
+        th { background: #f8f9fa; font-weight: bold; }
+        .diagonal { background: #fafafa; color: #ddd; }
+        .has-value { background: #e6f4ea; color: #1e8e3e; font-weight: bold; }
+
+        /* 歷史紀錄 */
+        .history-box { max-height: 250px; overflow-y: auto; background: #f9f9f9; padding: 10px; border-radius: 8px; border: 1px solid #eee; }
+        .history-item { display: flex; justify-content: space-between; padding: 10px; border-bottom: 1px solid #eee; align-items: center; }
+        .history-item:last-child { border-bottom: none; }
+        .match-info b { color: #1a73e8; }
+        .vs-tag { background: #666; color: white; padding: 2px 8px; border-radius: 10px; font-size: 0.75em; margin-left: 8px; vertical-align: middle; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>🏓 乒乓全能紀錄系統</h1>
+
+    <div class="section">
+        <h3>1. 球員名單 (每人總次數)</h3>
+        <div class="flex-row">
+            <input type="text" id="playerName" placeholder="輸入姓名">
+            <button onclick="addPlayer()">加入</button>
+            <button class="btn-danger" onclick="clearAllData()">重置所有</button>
+        </div>
+        <div id="playerList" style="margin-top: 15px;"></div>
+    </div>
+
+    <div class="section">
+        <h3>2. 紀錄新對局</h3>
+        <div class="flex-row">
+            <select id="playerA"></select>
+            <span style="font-weight: bold; color: #666;">VS</span>
+            <select id="playerB"></select>
+            <button class="btn-success" onclick="recordMatch()">紀錄對賽</button>
+        </div>
+    </div>
+
+    <div class="section">
+        <h3>3. 對陣圖示 (誰跟誰打過幾次)</h3>
+        <div class="matrix-wrapper">
+            <table id="vsMatrix">
+                <thead><tr id="matrixHead"></tr></thead>
+                <tbody id="matrixBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="section" style="border:none;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <h3>4. 對賽歷史紀錄</h3>
+            <button class="btn-export" onclick="exportCSV()">匯出 CSV 檔案</button>
+        </div>
+        <div id="history" class="history-box">目前沒有紀錄</div>
+    </div>
+</div>
+
+<script>
+    // 核心數據
+    let players = [];         // 球員名單
+    let playerTotals = {};    // 每位球員的總參賽次數
+    let vsCounts = {};        // 兩兩對賽的計數 {"A vs B": 5}
+    let historyLog = [];      // 歷史流水帳
+
+    // 初始化：從瀏覽器讀取舊資料
+    window.onload = function() {
+        const saved = localStorage.getItem('pingpong_master_data');
+        if (saved) {
+            const data = JSON.parse(saved);
+            players = data.players || [];
+            playerTotals = data.playerTotals || {};
+            vsCounts = data.vsCounts || {};
+            historyLog = data.historyLog || [];
+            updateUI();
+        }
+    };
+
+    // 新增球員
+    function addPlayer() {
+        const nameInput = document.getElementById('playerName');
+        const name = nameInput.value.trim();
+        if (!name) return;
+        if (players.length >= 10) return alert("最多支援 10 位球員");
+        if (players.includes(name)) return alert("姓名重複了");
+
+        players.push(name);
+        playerTotals[name] = 0;
+        nameInput.value = '';
+        updateUI();
+        saveToLocal();
+    }
+
+    // 紀錄對賽
+    function recordMatch() {
+        const pA = document.getElementById('playerA').value;
+        const pB = document.getElementById('playerB').value;
+        if (!pA || !pB || pA === pB) return alert("請選擇兩位不同的球員");
+
+        // 更新個人總次數
+        playerTotals[pA]++;
+        playerTotals[pB]++;
+
+        // 更新兩兩對賽次數
+        const pairKey = [pA, pB].sort().join(" vs ");
+        vsCounts[pairKey] = (vsCounts[pairKey] || 0) + 1;
+
+        // 加入歷史紀錄
+        const now = new Date();
+        const timeStr = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
+        historyLog.unshift({
+            pA: pA,
+            pB: pB,
+            time: timeStr,
+            currentVsCount: vsCounts[pairKey]
+        });
+
+        updateUI();
+        saveToLocal();
+    }
+
+    // 更新所有介面
+    function updateUI() {
+        // 1. 更新球員標籤與個人總次數
+        const listDiv = document.getElementById('playerList');
+        listDiv.innerHTML = players.map(p => `
+            <span class="player-chip">${p} <span class="count-badge">${playerTotals[p]}</span></span>
+        `).join('');
+
+        // 2. 更新下拉選單
+        const selA = document.getElementById('playerA');
+        const selB = document.getElementById('playerB');
+        const options = players.map(p => `<option value="${p}">${p}</option>`).join('');
+        selA.innerHTML = options;
+        selB.innerHTML = options;
+
+        // 3. 更新對陣矩陣
+        const head = document.getElementById('matrixHead');
+        const body = document.getElementById('matrixBody');
+        head.innerHTML = '<th>球員</th>' + players.map(p => `<th>${p}</th>`).join('');
+        body.innerHTML = '';
+        players.forEach((pRow, i) => {
+            let rowHtml = `<tr><td><b>${pRow}</b></td>`;
+            players.forEach((pCol, j) => {
+                if (i === j) rowHtml += `<td class="diagonal">-</td>`;
+                else {
+                    const count = vsCounts[[pRow, pCol].sort().join(" vs ")] || 0;
+                    rowHtml += `<td class="${count > 0 ? 'has-value' : ''}">${count}</td>`;
+                }
+            });
+            body.innerHTML += rowHtml + '</tr>';
+        });
+
+        // 4. 更新歷史紀錄
+        const historyDiv = document.getElementById('history');
+        if (historyLog.length === 0) {
+            historyDiv.innerHTML = "目前沒有紀錄";
+        } else {
+            historyDiv.innerHTML = historyLog.map(h => `
+                <div class="history-item">
+                    <div class="match-info">
+                        <b>${h.pA}</b> vs <b>${h.pB}</b>
+                        <span class="vs-tag">累計第 ${h.currentVsCount} 次</span>
+                    </div>
+                    <div style="color: #999; font-size: 0.85em;">${h.time}</div>
+                </div>
+            `).join('');
+        }
+    }
+
+    // 儲存功能
+    function saveToLocal() {
+        const data = { players, playerTotals, vsCounts, historyLog };
+        localStorage.setItem('pingpong_master_data', JSON.stringify(data));
+    }
+
+    function clearAllData() {
+        if (confirm("這會刪除所有球員、計數與歷史紀錄，確定嗎？")) {
+            localStorage.removeItem('pingpong_master_data');
+            location.reload();
+        }
+    }
+
+    // 匯出功能
+    function exportCSV() {
+        let csv = "\uFEFF球員,總參賽次數\n";
+        players.forEach(p => csv += `${p},${playerTotals[p]}\n`);
+        
+        csv += "\n對陣矩陣統計\n,";
+        csv += players.join(",") + "\n";
+        players.forEach(pRow => {
+            csv += pRow + ",";
+            csv += players.map(pCol => pRow === pCol ? "-" : (vsCounts[[pRow, pCol].sort().join(" vs ")] || 0)).join(",") + "\n";
+        });
+
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = `乒乓對賽結果_${new Date().toLocaleDateString()}.csv`;
+        link.click();
+    }
+</script>
+
+</body>
+</html>
